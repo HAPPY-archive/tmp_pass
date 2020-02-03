@@ -1,0 +1,62 @@
+for (auto GV = M.global_begin(); GV != M.global_end(); GV++) {
+                GlobalVariable *GVPtr = &*GV;
+                //Filter out GVs that could potentially be referenced outside of current TU
+                if (GVPtr->hasInitializer() && (GVPtr->hasPrivateLinkage() || GVPtr->hasInternalLinkage())) {
+                    if (ConstantInt *CI = dyn_cast<ConstantInt>(GVPtr->getInitializer())) {
+                        //Prepare Types and Keys
+                        IntegerType *IT = cast<IntegerType>(CI->getType());
+                        uint8_t K = randomEngine() % 0xFF;
+                        llvm::outs() << "Xor var " + CI->getName() << " with " << K;
+                        ConstantInt *XORKey = ConstantInt::get(IT, K);
+                        //Encrypt Original GV
+                        ConstantInt *newGVInit = ConstantInt::get(IT, CI->getZExtValue() ^ K);
+                        GVPtr->setInitializer(newGVInit);
+                        for (User *U : GVPtr->users()) {
+                            if (LoadInst *LI = dyn_cast<LoadInst>(U)) {
+                                // This is dummy Instruction so we can use replaceAllUsesWith
+                                // without having to hand-craft our own implementation
+                                // We will relace LHS later
+                                Instruction *XORInst = BinaryOperator::CreateXor(XORKey, XORKey);
+                                XORInst->insertAfter(LI);
+                                LI->replaceAllUsesWith(XORInst);
+                                XORInst->setOperand(0, LI);
+
+                            } else if (StoreInst *SI = dyn_cast<StoreInst>(U)) {
+                                Instruction *XORInst = BinaryOperator::CreateXor(SI->getValueOperand(), XORKey);
+                                XORInst->insertBefore(SI);
+                                SI->replaceUsesOfWith(SI->getValueOperand(), XORInst);
+                            }
+                        }
+                    }
+                }
+            }
+
+
+namespace {
+    struct ConstantEncryption : public ModulePass {
+        static char ID;
+        std::random_device rd;
+        std::default_random_engine randomEngine{rd()};
+
+        ConstantEncryption() : ModulePass(ID) {}
+
+        bool runOnModule(Module &M) override {
+
+            llvm::outs() << "Running in the module !\n";
+
+            for (auto &F : M) {
+                outs() << "I Find " + F.getName() << "\n";
+            }
+
+            return true;
+        }
+    };
+
+}
+static void registerSkeletonPass(const PassManagerBuilder &,
+                                 legacy::PassManagerBase &PM) {
+    PM.add(new ConstantEncryption());
+}
+static RegisterStandardPasses
+        RegisterMyPass(PassManagerBuilder::EP_EarlyAsPossible,
+                       registerSkeletonPass);
